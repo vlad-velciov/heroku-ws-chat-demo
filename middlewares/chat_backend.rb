@@ -2,6 +2,7 @@ require 'faye/websocket'
 require 'redis'
 require 'json'
 require 'middlewares/queue/redis_queue'
+require 'middlewares/message'
 
 module ChatDemo
   class ChatBackend
@@ -16,9 +17,25 @@ module ChatDemo
       @number_of_connections = 0
       @queue = queue
       uri = nil
+      listen_all
       @publisher =redis_connection(uri)
       @queue.connection = redis_connection(uri)
-      puts 'initialize'
+    end
+
+    def listen_all
+      Thread.new do
+        redis = redis_connection nil
+        redis.subscribe(CHANNEL,) { |on|
+          on.message do |channel, message|
+            send_to_terminal(message)
+          end
+        }
+      end
+    end
+
+    def send_to_terminal(message)
+      parsed_message = Message.new(message)
+      @clients_hash[parsed_message.serial_number].send(parsed_message.data) if @clients_hash.has_key? parsed_message.serial_number
     end
 
     def redis_connection(uri)
@@ -53,13 +70,17 @@ module ChatDemo
 
     def message_event(ws)
       ws.on :message do |event|
-        @publisher.publish(CHANNEL + ws.object_id.to_s, event.data)
+        @publisher.publish(CHANNEL, event.data)
       end
     end
 
     def open_event(ws)
       ws.on :open do |event|
-        p [:open, ws.object_id]
+        p [:open]
+        p ws.object_id.to_s
+        @clients_hash[ws.object_id.to_s.to_sym] = ws
+        p 'clients count'
+        p @clients_hash.count
         increment_connection_number
         @clients << ws
 

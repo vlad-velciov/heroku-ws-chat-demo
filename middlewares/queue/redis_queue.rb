@@ -5,12 +5,16 @@ module ChatDemo
     attr_writer :connection
 
     def subscribe(channel_index = '0', ws)
-      p 'subscribed'
       connection_stub.subscribe(computed_channel channel_index) do |on|
         on.message do |channel, msg|
           ws.send msg
         end
       end
+    end
+
+    def add_channel(index)
+      separator = @registered_channels.empty? ? '' : ' '
+      @registered_channels = @registered_channels + separator + computed_channel(index)
     end
 
     def connection_stub
