@@ -1,6 +1,7 @@
 require 'faye/websocket'
 require 'redis'
 require 'json'
+require 'middlewares/queue/redis_queue'
 
 module ChatDemo
   class ChatBackend
@@ -8,22 +9,20 @@ module ChatDemo
     CHANNEL = 'chat-demo'
     WS_LIMIT = 900
 
-    def initialize(app)
+    def initialize(app, queue = RedisQueue.new)
       @app = app
       @clients = []
       @clients_hash = {}
       @number_of_connections = 0
+      @queue = queue
       uri = nil
-      @redis = redis_connection(uri)
+      @publisher =redis_connection(uri)
+      @queue.connection = redis_connection(uri)
       puts 'initialize'
     end
 
     def redis_connection(uri)
       Redis.new
-    end
-
-    def notify_client(client, message)
-      client.send message
     end
 
     def call(env)
@@ -46,7 +45,7 @@ module ChatDemo
     def close_event(ws)
       ws.on :close do |event|
         @clients.delete(ws)
-        @number_of_connections = @number_of_connections - 1
+        decrement_connection_number
         ws = nil
       end
       ws
@@ -54,32 +53,32 @@ module ChatDemo
 
     def message_event(ws)
       ws.on :message do |event|
-        @redis.publish(CHANNEL + ws.object_id.to_s, event.data)
+        @publisher.publish(CHANNEL + ws.object_id.to_s, event.data)
       end
     end
 
     def open_event(ws)
       ws.on :open do |event|
         p [:open, ws.object_id]
-        @number_of_connections = @number_of_connections + 1
+        increment_connection_number
         @clients << ws
+
         subscribe_to_channel ws.object_id.to_s, ws
       end
     end
 
-    def subscribe_to_channel(channel_index = '0', ws)
+    def subscribe_to_channel(identifier, ws)
       Thread.new do
-        redis_sub = redis_connection(nil)
-        redis_sub.subscribe(computed_channel channel_index) do |on|
-          on.message do |channel, msg|
-            ws.send msg
-          end
-        end
+        @queue.subscribe identifier, ws
       end
     end
 
-    def computed_channel(index)
-      CHANNEL + index
+    def decrement_connection_number
+      @number_of_connections = @number_of_connections - 1
+    end
+
+    def increment_connection_number
+      @number_of_connections = @number_of_connections + 1
     end
   end
 end
