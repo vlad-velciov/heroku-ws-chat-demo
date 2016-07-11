@@ -14,24 +14,8 @@ module ChatDemo
       @clients_hash = {}
       @number_of_connections = 0
       uri = nil
-      # uri = URI.parse ENV['REDISCLOUD_URL']
       @redis = redis_connection(uri)
-      # create_threads
-      thread_for_all(uri)
-    end
-
-    def thread_for_all(uri)
-      # Thread.new do
-      #   subscribe_to_channel 0
-      # end
-    end
-
-    def create_threads
-      # @clients.each do |client|
-      #   Thread.new do
-      #     subscribe_to_channel 0
-      #   end
-      # end
+      puts 'initialize'
     end
 
     def redis_connection(uri)
@@ -61,11 +45,7 @@ module ChatDemo
 
     def close_event(ws)
       ws.on :close do |event|
-        p [:close, event.data]
-
-        # p [:close, ws.object_id, event.code, event.reason]
         @clients.delete(ws)
-        @clients_hash.delete ws.object_id
         @number_of_connections = @number_of_connections - 1
         ws = nil
       end
@@ -74,34 +54,32 @@ module ChatDemo
 
     def message_event(ws)
       ws.on :message do |event|
-        p [:message, event.data]
-        @redis.publish(CHANNEL + '0', event.data)
+        @redis.publish(CHANNEL + ws.object_id.to_s, event.data)
       end
     end
 
     def open_event(ws)
       ws.on :open do |event|
-        p 'open'
+        p [:open, ws.object_id]
         @number_of_connections = @number_of_connections + 1
-        p @number_of_connections
-        # @clients_hash[ws.object_id] = ws
         @clients << ws
-        p ws.object_id
-
-        subscribe_to_channel ws.object_id.to_s
-
-        p @number_of_connections
+        subscribe_to_channel ws.object_id.to_s, ws
       end
     end
 
-    def subscribe_to_channel(channel_index = '0')
-      redis_sub = redis_connection(nil)
-      redis_sub.subscribe(CHANNEL + channel_index) do |on|
-        p 'adadsdad'
-        on.message do |channel, msg|
-          @clients_hash[channel_index].send msg
+    def subscribe_to_channel(channel_index = '0', ws)
+      Thread.new do
+        redis_sub = redis_connection(nil)
+        redis_sub.subscribe(computed_channel channel_index) do |on|
+          on.message do |channel, msg|
+            ws.send msg
+          end
         end
       end
+    end
+
+    def computed_channel(index)
+      CHANNEL + index
     end
   end
 end

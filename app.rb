@@ -1,6 +1,7 @@
 require 'sinatra/base'
 require 'redis'
 require 'puma'
+ENV['RACK_ENV'] = 'production'
 
 class ApiApplication < Sinatra::Base
   configure { set :server, :puma }
