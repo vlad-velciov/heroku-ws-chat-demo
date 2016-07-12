@@ -3,6 +3,7 @@ require 'redis'
 require 'json'
 require 'middlewares/queue/redis_queue'
 require 'middlewares/message'
+require 'em-hiredis'
 
 module ChatDemo
   class ChatBackend
@@ -15,31 +16,36 @@ module ChatDemo
       @clients = []
       @clients_hash = {}
       @number_of_connections = 0
-      @queue = queue
+      start_eventmachine
       uri = nil
       listen_all
       @publisher =redis_connection(uri)
-      @queue.connection = redis_connection(uri)
+    end
+
+    def start_eventmachine
+      Thread.new { EM.run } unless EM.reactor_running?
+      Thread.pass until EM.reactor_running?
     end
 
     def listen_all
-      Thread.new do
-        redis = redis_connection nil
-        redis.subscribe(CHANNEL,) { |on|
-          on.message do |channel, message|
+      EM.next_tick do
+        pubsub = redis_connection nil
+        pubsub.subscribe(CHANNEL)
+        pubsub.on(:message) { |channel, message|
             send_to_terminal(message)
-          end
         }
       end
     end
 
     def send_to_terminal(message)
       parsed_message = Message.new(message)
+      p @clients_hash.keys
       @clients_hash[parsed_message.serial_number].send(parsed_message.data) if @clients_hash.has_key? parsed_message.serial_number
     end
 
     def redis_connection(uri)
-      Redis.new
+      redis = EM::Hiredis.connect
+      redis.pubsub
     end
 
     def call(env)
@@ -61,11 +67,16 @@ module ChatDemo
 
     def close_event(ws)
       ws.on :close do |event|
-        @clients.delete(ws)
-        decrement_connection_number
+        forget_connection ws
         ws = nil
       end
       ws
+    end
+
+    def forget_connection(ws)
+      @clients.delete(ws)
+      @clients_hash.delete(ws)
+      decrement_connection_number
     end
 
     def message_event(ws)
@@ -83,14 +94,6 @@ module ChatDemo
         p @clients_hash.count
         increment_connection_number
         @clients << ws
-
-        subscribe_to_channel ws.object_id.to_s, ws
-      end
-    end
-
-    def subscribe_to_channel(identifier, ws)
-      Thread.new do
-        @queue.subscribe identifier, ws
       end
     end
 
