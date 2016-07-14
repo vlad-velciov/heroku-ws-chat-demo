@@ -1,25 +1,30 @@
 require 'faye/websocket'
 require 'redis'
 require 'json'
-require 'middlewares/queue/redis_queue'
 require 'middlewares/message'
 require 'em-hiredis'
+require 'profile_helper/profiler'
 
 module ChatDemo
   class ChatBackend
+
+    include ChatDemo::Profiler
+
     KEEP_ALIVE_TIME = 15
     CHANNEL = 'chat-demo'
-    WS_LIMIT = 900
 
-    def initialize(app, queue = RedisQueue.new)
+    def initialize(app)
       @app = app
+      initialize_clients
+      start_eventmachine
+      listen_all
+      @publisher =redis_connection(nil)
+    end
+
+    def initialize_clients
       @clients = []
       @clients_hash = {}
       @number_of_connections = 0
-      start_eventmachine
-      uri = nil
-      listen_all
-      @publisher =redis_connection(uri)
     end
 
     def start_eventmachine
@@ -32,25 +37,24 @@ module ChatDemo
         pubsub = redis_connection nil
         pubsub.subscribe(CHANNEL)
         pubsub.on(:message) { |channel, message|
-            send_to_terminal(message)
+          send_to_terminal(message)
         }
       end
     end
 
     def send_to_terminal(message)
       parsed_message = Message.new(message)
-      p @clients_hash.keys
       @clients_hash[parsed_message.serial_number].send(parsed_message.data) if @clients_hash.has_key? parsed_message.serial_number
     end
 
     def redis_connection(uri)
-      redis = EM::Hiredis.connect
+      redis = EM::Hiredis.connect uri
       redis.pubsub
     end
 
     def call(env)
       if Faye::WebSocket.websocket? env
-        ws = Faye::WebSocket.new(env, nil, {ping: KEEP_ALIVE_TIME})
+        ws = Faye::WebSocket.new(env, nil, {ping: KEEP_ALIVE_TIME, tls: true})
         open_event(ws)
         message_event(ws)
         ws = close_event(ws)
@@ -61,12 +65,9 @@ module ChatDemo
       end
     end
 
-    def reached_limit?
-      @clients.count >= WS_LIMIT
-    end
-
     def close_event(ws)
       ws.on :close do |event|
+        p [:close]
         forget_connection ws
         ws = nil
       end
@@ -88,13 +89,15 @@ module ChatDemo
     def open_event(ws)
       ws.on :open do |event|
         p [:open]
-        p ws.object_id.to_s
         @clients_hash[ws.object_id.to_s.to_sym] = ws
-        p 'clients count'
-        p @clients_hash.count
         increment_connection_number
         @clients << ws
+        send_connection_id(ws)
       end
+    end
+
+    def send_connection_id(ws)
+      ws.send ws.object_id.to_s
     end
 
     def decrement_connection_number
